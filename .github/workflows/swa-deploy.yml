@@ -1,0 +1,123 @@
+# Reusable Azure Static Web Apps CI/CD workflow for 1823 frontend apps.
+#
+# Usage in consumer app:
+#
+#   name: Azure Static Web Apps CI/CD
+#   on:
+#     push:
+#       branches: [main, release-*]
+#     pull_request:
+#       types: [opened, synchronize, reopened, closed]
+#       branches: [main, release-*]
+#
+#   jobs:
+#     deploy:
+#       uses: 1823-partners/infrastructure/.github/workflows/swa-deploy.yml@main
+#       with:
+#         azure_token_secret_name: AZURE_STATIC_WEB_APPS_API_TOKEN_KIND_POND_0B830B30F
+#       secrets: inherit
+
+name: SWA Deploy (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      azure_token_secret_name:
+        description: "Name of the Azure SWA API token secret (e.g., AZURE_STATIC_WEB_APPS_API_TOKEN_KIND_POND_0B830B30F)"
+        required: true
+        type: string
+      node_version:
+        description: "Node.js version to use"
+        required: false
+        type: string
+        default: "22"
+      run_tests:
+        description: "Whether to run unit tests before deploying"
+        required: false
+        type: boolean
+        default: true
+      test_args:
+        description: "Extra arguments for npm test (e.g., --passWithNoTests)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  packages: read
+  pull-requests: write
+
+jobs:
+  build_and_deploy:
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.action != 'closed')
+    runs-on: ubuntu-latest
+    name: Build and Deploy
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@1823-partners"
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run unit tests
+        if: inputs.run_tests
+        env:
+          CI: "true"
+          TEST_ARGS: ${{ inputs.test_args }}
+        run: npm test -- --watchAll=false $TEST_ARGS
+
+      - name: Prepare preview env
+        if: github.ref == 'refs/heads/main'
+        run: |
+          if [ -f .env.preview ]; then
+            cp .env.preview .env.production.local
+          fi
+
+      - name: Build
+        env:
+          CI: "false"
+        run: npm run build
+
+      - name: Deploy main → preview
+        if: github.ref == 'refs/heads/main'
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets[inputs.azure_token_secret_name] }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: "upload"
+          app_location: "build"
+          skip_app_build: true
+          deployment_environment: "preview"
+
+      - name: Deploy release → production
+        if: startsWith(github.ref, 'refs/heads/release-')
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets[inputs.azure_token_secret_name] }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: "upload"
+          app_location: "build"
+          skip_app_build: true
+
+  close_pull_request:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    name: Close Pull Request
+    steps:
+      - name: Close Pull Request
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets[inputs.azure_token_secret_name] }}
+          action: "close"
