@@ -41,6 +41,11 @@ on:
         required: false
         type: string
         default: ""
+      api_location:
+        description: "Path to the SWA-managed Azure Functions API folder, relative to repo root. Empty string means no API."
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -98,6 +103,7 @@ jobs:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           action: "upload"
           app_location: "build"
+          api_location: ${{ inputs.api_location }}
           skip_app_build: true
           deployment_environment: "preview"
 
@@ -109,6 +115,7 @@ jobs:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           action: "upload"
           app_location: "build"
+          api_location: ${{ inputs.api_location }}
           skip_app_build: true
 
   close_pull_request:
