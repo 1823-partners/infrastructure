@@ -1,0 +1,103 @@
+# SWA API proxy template
+
+Drop-in Function proxy that lets a 1823 SWA forward authenticated calls
+to Beacon **without bundling Beacon credentials in the React build**.
+Beacon's `user_token` and `app_token` move into SWA app settings; the
+browser only ever talks to `/api/<app>/*` on its own origin.
+
+## What it does
+
+```
+React bundle  →  /api/<app>/*  →  SWA Function (this proxy)  →  Beacon
+                                  • adds x-ms-client-principal (signed by SWA)
+                                  • adds Bearer <jwt from /login/authtoken>
+```
+
+The SWA edge enforces auth (`/api/<app>/*` is gated to `authenticated`
+in `staticwebapp.config.json`) and signs the `x-ms-client-principal`
+blob, which the proxy relays so Beacon can read the verified caller
+identity via `pam.servers.utils.auth.caller_email`.
+
+The proxy caches the Beacon bearer for ~55 min so each cold Function
+instance pays exactly one handshake.
+
+## Adoption checklist (per app)
+
+1. **Copy the template into your app's repo:**
+   ```bash
+   cp -r infrastructure/swa-api-template <your-app>/api
+   ```
+2. **Rename the function directory** from `__APP__` to your app's URL
+   slug. The slug must match three things:
+   - the directory name (`<app>/api/<slug>/`)
+   - the `route` in `<slug>/function.json` (`"<slug>/{*path}"`)
+   - the route gate in your `staticwebapp.config.json`
+     (`/api/<slug>/*`)
+   - the `APP_NAME` SWA app setting (used to build the upstream
+     `pam/<APP_NAME>/...` URL)
+
+   E.g. for `blotter`: rename `__APP__` to `blotter` and set
+   `APP_NAME=blotter` in app settings.
+3. **Replace the route and APP_NAME placeholders.** Quick sed:
+   ```bash
+   cd <your-app>/api
+   mv __APP__ <slug>
+   sed -i "s/__APP__/<slug>/g" <slug>/function.json
+   ```
+4. **Wire the workflow** by setting `api_location: "api"` in the
+   consumer workflow YAML:
+   ```yaml
+   uses: 1823-partners/infrastructure/.github/workflows/swa-deploy.yml@main
+   with:
+     azure_token_secret_name: AZURE_STATIC_WEB_APPS_API_TOKEN_…
+     api_location: "api"
+   secrets: inherit
+   ```
+5. **Set the SWA app settings** (Azure Portal → Configuration →
+   Application settings) on **both** Production and Preview environments
+   (Preview does NOT inherit from Production):
+
+   | Setting                    | Value                              |
+   |----------------------------|------------------------------------|
+   | `BEACON_URL`               | `https://pam.wsq.io`              |
+   | `DB_ENV`                   | `prod` (or `prod_snap`, `dev`)     |
+   | `APP_NAME`                 | the URL slug, e.g. `blotter`       |
+   | `BEACON_USER_TOKEN_ID`     | service user token id              |
+   | `BEACON_USER_TOKEN_SECRET` | service user token secret          |
+   | `BEACON_APP_TOKEN_ID`      | per-app token id                   |
+   | `BEACON_APP_TOKEN_SECRET`  | per-app token secret               |
+
+6. **Update the frontend API client** to point at `/api/<slug>` and
+   remove the bundled token JSONs:
+   - Delete `src/api/beacon_user_token.json`.
+   - Delete `src/api/beacon_app_token_<APP>.json`.
+   - In `src/api/index.js`, change the base URL from
+     `${BEACON_URL}/r/${DB_ENV}/pam/<slug>` to `/api/<slug>` and remove
+     the `getAuthToken` handshake — the proxy handles auth.
+   - 1823-core ≥1.14.0 ships `createBeaconProxyApi({ appName })` for
+     this exact pattern; preferred over hand-rolling the client.
+7. **Deploy and verify:**
+   - Push to `main` → preview environment, then to a release branch
+     for production.
+   - Hit `/api/<slug>/<known-endpoint>` from the deployed app and
+     confirm a 200 with the expected body.
+   - Inspect the deployed bundle to confirm no `beacon_*_token*.json`
+     strings remain.
+
+## Files in this template
+
+| File                        | Purpose                                           |
+|-----------------------------|---------------------------------------------------|
+| `host.json`                 | Functions runtime config (extension bundle v4)    |
+| `package.json`              | Single dep: `node-fetch@^2`                       |
+| `__APP__/function.json`     | HTTP trigger, routes `<app>/{*path}`              |
+| `__APP__/index.js`          | Token cache + relay of `x-ms-client-principal`    |
+
+## Reference: working example
+
+`permissions/api/permissions/index.js` was the first instance of this
+pattern (slightly app-specific) and is what this template was
+generalized from. Diffs between the two:
+- this template reads `APP_NAME` from env to build the upstream URL;
+  the permissions copy hardcoded `pam/permissions/`.
+- this template accepts PUT/PATCH/DELETE in addition to GET/POST.

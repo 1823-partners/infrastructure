@@ -1,0 +1,9 @@
+{
+  "name": "swa-api-template",
+  "version": "1.0.0",
+  "description": "Azure Function proxy that forwards /api/<app>/* to Beacon with the SWA-signed x-ms-client-principal header. Replaces bundled Beacon credentials with SWA app settings.",
+  "private": true,
+  "dependencies": {
+    "node-fetch": "^2.7.0"
+  }
+}
