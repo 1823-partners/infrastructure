@@ -5,6 +5,10 @@ to Beacon **without bundling Beacon credentials in the React build**.
 Beacon's `user_token` and `app_token` move into SWA app settings; the
 browser only ever talks to `/api/<app>/*` on its own origin.
 
+The proxy logic lives in [`@1823-partners/swa-proxy`](https://github.com/1823-partners/swa-proxy);
+this template is the per-app skeleton (host.json + function.json + a 4-line
+`index.js` wrapper).
+
 ## What it does
 
 ```
@@ -15,8 +19,8 @@ React bundle  →  /api/<app>/*  →  SWA Function (this proxy)  →  Beacon
 
 The SWA edge enforces auth (`/api/<app>/*` is gated to `authenticated`
 in `staticwebapp.config.json`) and signs the `x-ms-client-principal`
-blob, which the proxy relays so Beacon can read the verified caller
-identity via `pam.servers.utils.auth.caller_email`.
+blob, which `@1823-partners/swa-proxy` relays so Beacon can read the
+verified caller identity via `pam.servers.utils.auth.caller_email`.
 
 The proxy caches the Beacon bearer for ~55 min so each cold Function
 instance pays exactly one handshake.
@@ -38,7 +42,7 @@ instance pays exactly one handshake.
 
    E.g. for `blotter`: rename `__APP__` to `blotter` and set
    `APP_NAME=blotter` in app settings.
-3. **Replace the route and APP_NAME placeholders.** Quick sed:
+3. **Replace the route placeholder.** Quick sed:
    ```bash
    cd <your-app>/api
    mv __APP__ <slug>
@@ -59,13 +63,14 @@ instance pays exactly one handshake.
 
    | Setting                    | Value                              |
    |----------------------------|------------------------------------|
-   | `BEACON_URL`               | `https://pam.wsq.io`              |
-   | `DB_ENV`                   | `prod` (or `prod_snap`, `dev`)     |
    | `APP_NAME`                 | the URL slug, e.g. `blotter`       |
-   | `BEACON_USER_TOKEN_ID`     | service user token id              |
-   | `BEACON_USER_TOKEN_SECRET` | service user token secret          |
    | `BEACON_APP_TOKEN_ID`      | per-app token id                   |
    | `BEACON_APP_TOKEN_SECRET`  | per-app token secret               |
+   | `BEACON_URL`               | `https://pam.wsq.io`               |
+   | `BEACON_USER_TOKEN_ID`     | service user token id              |
+   | `BEACON_USER_TOKEN_SECRET` | service user token secret          |
+   | `DB_ENV`                   | `prod` (or `prod_snap`, `dev`)     |
+   | `NODE_AUTH_TOKEN`          | GitHub Packages PAT (`read:packages`) — needed for Oryx to install `@1823-partners/swa-proxy` at deploy time |
 
 6. **Update the frontend API client** to point at `/api/<slug>` and
    remove the bundled token JSONs:
@@ -86,18 +91,18 @@ instance pays exactly one handshake.
 
 ## Files in this template
 
-| File                        | Purpose                                           |
-|-----------------------------|---------------------------------------------------|
-| `host.json`                 | Functions runtime config (extension bundle v4)    |
-| `package.json`              | Single dep: `node-fetch@^2`                       |
-| `__APP__/function.json`     | HTTP trigger, routes `<app>/{*path}`              |
-| `__APP__/index.js`          | Token cache + relay of `x-ms-client-principal`    |
+| File                     | Purpose                                                      |
+|--------------------------|--------------------------------------------------------------|
+| `host.json`              | Functions runtime config (extension bundle v4)               |
+| `package.json`           | Single dep: `@1823-partners/swa-proxy`                       |
+| `.npmrc`                 | GH Packages registry + `${NODE_AUTH_TOKEN}` substitution     |
+| `__APP__/function.json`  | HTTP trigger, routes `<app>/{*path}`                         |
+| `__APP__/index.js`       | 4-line wrapper around `createBeaconProxy()`                  |
 
-## Reference: working example
+## Reference: working examples
 
-`permissions/api/permissions/index.js` was the first instance of this
-pattern (slightly app-specific) and is what this template was
-generalized from. Diffs between the two:
-- this template reads `APP_NAME` from env to build the upstream URL;
-  the permissions copy hardcoded `pam/permissions/`.
-- this template accepts PUT/PATCH/DELETE in addition to GET/POST.
+- `bob-dashboard/api/bob-dashboard/`
+- `permissions/api/permissions/`
+
+Both consumers are identical 4-line wrappers; all proxy behavior lives in
+`@1823-partners/swa-proxy`.
