@@ -72,22 +72,53 @@ instance pays exactly one handshake.
    | `DB_ENV`                   | `prod` (or `prod_snap`, `dev`)     |
    | `NODE_AUTH_TOKEN`          | GitHub Packages PAT (`read:packages`) — needed for Oryx to install `@1823-partners/swa-proxy` at deploy time |
 
-6. **Update the frontend API client** to point at `/api/<slug>` and
-   remove the bundled token JSONs:
-   - Delete `src/api/beacon_user_token.json`.
-   - Delete `src/api/beacon_app_token_<APP>.json`.
-   - In `src/api/index.js`, change the base URL from
-     `${BEACON_URL}/r/${DB_ENV}/pam/<slug>` to `/api/<slug>` and remove
-     the `getAuthToken` handshake — the proxy handles auth.
-   - 1823-core ≥1.14.0 ships `createBeaconProxyApi({ appName })` for
-     this exact pattern; preferred over hand-rolling the client.
+6. **Scrub Beacon credentials from the React bundle.** The whole point of
+   the proxy is that prod ships zero Beacon credentials. Even *unused*
+   imports get inlined by webpack, so the JSON files have to go off disk
+   entirely.
+   - Delete `src/api/beacon_user_token.json` if it exists.
+   - Delete `src/api/beacon_app_token_<APP>.json` if it exists.
+   - In `src/api/index.js`, remove **both** imports and any
+     `clientToken: CLIENT_TOKEN` arg. Use the env-driven transport:
+     ```js
+     import axios from 'axios';
+     import { createAppTransport } from '@1823-partners/core';
+
+     const api = createAppTransport({ axios, appName: '<slug>' });
+     ```
+   - `createAppTransport` (≥1.18.0) picks proxy mode in production and
+     direct mode (`pam.wsq.io`) in dev/test. Direct mode reads
+     credentials from `REACT_APP_BEACON_*` env vars — no JSON imports.
+   - Add a `.env.local.example` documenting the four env vars dev needs
+     (see `bob-dashboard/.env.local.example` for the canonical shape):
+     ```
+     REACT_APP_BEACON_URL=https://pam.wsq.io
+     REACT_APP_DB_ENV=dev
+     REACT_APP_BEACON_USER_TOKEN_ID=
+     REACT_APP_BEACON_USER_TOKEN_SECRET=
+     REACT_APP_BEACON_APP_TOKEN_ID=
+     REACT_APP_BEACON_APP_TOKEN_SECRET=
+     ```
+     Confirm `.env.local` is in `.gitignore` (CRA's default ignore
+     already covers it).
+   - Update tests that mocked the JSON imports
+     (`jest.mock('../beacon_app_token_*.json', ...)`) — drop those
+     mocks; nothing imports the JSON anymore.
 7. **Deploy and verify:**
    - Push to `main` → preview environment, then to a release branch
      for production.
    - Hit `/api/<slug>/<known-endpoint>` from the deployed app and
      confirm a 200 with the expected body.
-   - Inspect the deployed bundle to confirm no `beacon_*_token*.json`
-     strings remain.
+   - **Verify the bundle is credential-free.** Grep the production
+     bundle for the user-token id and app-token id; both must be
+     absent:
+     ```bash
+     curl -s https://<host>/static/js/main.*.js \
+       | grep -c -E 'token_(id|secret)|client_(id|secret)'
+     # Expect: 0
+     ```
+   - Confirm no `beacon_*_token*.json` strings remain in the served
+     bundle either.
 
 ## Files in this template
 
