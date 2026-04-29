@@ -10,6 +10,9 @@
 //   3. Edit .github/workflows/azure-static-web-apps-*.yml to set
 //      api_location: "api" on the reusable swa-deploy.yml call.
 //   4. Emit .app-settings.env.example listing every SWA app setting needed.
+//   5. Emit .env.local.example listing the REACT_APP_* vars a dev needs in
+//      .env.local for direct-mode `npm start` / `jest` (incl. dev-caller
+//      email so the X-Dev-Caller-Email interceptor has something to stamp).
 //
 // What this does NOT do (intentional, see README):
 //   - Modify <app>/src/api/index.js (we don't know the app's API surface).
@@ -29,6 +32,7 @@ const {
   findSwaWorkflow,
   setApiLocationInWorkflow,
   renderAppSettingsExample,
+  renderEnvLocalExample,
 } = require('./utils');
 
 async function runInit({ appSlug, appDir, templatesDir, force }) {
@@ -91,6 +95,15 @@ async function runInit({ appSlug, appDir, templatesDir, force }) {
   } else {
     fs.writeFileSync(envExamplePath, renderAppSettingsExample({ slug: appSlug, appName }));
     log(`wrote ${path.relative(appDir, envExamplePath)}`);
+  }
+
+  // 5. .env.local.example (frontend dev env — gitignored .env.local target)
+  const envLocalExamplePath = path.join(appDir, '.env.local.example');
+  if (fs.existsSync(envLocalExamplePath) && !force) {
+    log(`${path.relative(appDir, envLocalExamplePath)} exists — leaving alone (re-run with --force to overwrite)`);
+  } else {
+    fs.writeFileSync(envLocalExamplePath, renderEnvLocalExample({ slug: appSlug }));
+    log(`wrote ${path.relative(appDir, envLocalExamplePath)}`);
   }
 
   process.stdout.write(

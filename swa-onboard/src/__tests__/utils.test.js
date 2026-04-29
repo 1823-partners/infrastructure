@@ -12,6 +12,7 @@ const {
   copyTreeWithSubstitution,
   setApiLocationInWorkflow,
   renderAppSettingsExample,
+  renderEnvLocalExample,
 } = require('../utils');
 
 function tmpDir(prefix) {
@@ -97,6 +98,26 @@ test('setApiLocationInWorkflow rejects non-SWA workflow', () => {
   const wf = path.join(dir, 'broken.yml');
   fs.writeFileSync(wf, 'name: nope\n');
   assert.throws(() => setApiLocationInWorkflow(wf), /no `jobs:` block/);
+});
+
+test('renderEnvLocalExample includes REACT_APP_DEV_USER and beacon vars', () => {
+  // Devs need both the direct-mode Beacon credentials and the dev-caller
+  // email var so the X-Dev-Caller-Email interceptor in @1823-partners/core
+  // has something to stamp on outgoing requests when running on localhost.
+  const out = renderEnvLocalExample({ slug: 'bob-dashboard' });
+  for (const key of [
+    'REACT_APP_BEACON_URL',
+    'REACT_APP_DB_ENV',
+    'REACT_APP_BEACON_USER_TOKEN_ID',
+    'REACT_APP_BEACON_USER_TOKEN_SECRET',
+    'REACT_APP_BEACON_APP_TOKEN_ID',
+    'REACT_APP_BEACON_APP_TOKEN_SECRET',
+    'REACT_APP_DEV_USER',
+  ]) {
+    assert.match(out, new RegExp(key));
+  }
+  // Slug substitutes into the comment pointing at api/<slug>/index.js.
+  assert.match(out, /api\/bob-dashboard\/index\.js/);
 });
 
 test('renderAppSettingsExample includes all required keys', () => {

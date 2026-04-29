@@ -39,6 +39,7 @@ Scaffolds onto an existing SWA repo (must already have `package.json` and
 | `<app>/api/<slug>/function.json` + `index.js`       | HTTP-trigger Function that wraps `createBeaconProxy()` from `@1823-partners/swa-proxy`. Forwards `/api/<slug>/{*path}` to Beacon with the SWA-signed `x-ms-client-principal`. |
 | `<app>/.github/workflows/azure-static-web-apps-*.yml` | Patched (via js-yaml) so the swa-deploy.yml call sets `api_location: "api"`. Idempotent.                                                              |
 | `<app>/.app-settings.env.example`                   | Lists every SWA app setting the proxy + AAD config require, with sane defaults. Operator copies values into Azure Portal on **both** Production and Preview. |
+| `<app>/.env.local.example`                          | Lists the `REACT_APP_*` vars a dev needs in `.env.local` for direct-mode `npm start` / `jest` (Beacon credentials + `REACT_APP_DEV_USER` for the X-Dev-Caller-Email interceptor). Gitignored target. |
 
 What it deliberately does **not** do:
 

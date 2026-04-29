@@ -133,6 +133,45 @@ function renderAppSettingsExample({ slug, appName }) {
   ].join('\n');
 }
 
+// Render the `.env.local.example` body. Lists the REACT_APP_* env vars a
+// developer needs in `.env.local` (gitignored) for `npm start` / `jest` to
+// hit Beacon directly. Production builds don't read these — they go through
+// the SWA Function proxy, which holds the same Beacon credentials in
+// Application Settings instead. Includes REACT_APP_DEV_USER so the dev
+// caller-email interceptor in @1823-partners/core can stamp the
+// X-Dev-Caller-Email header on outgoing requests (honored only when the
+// dev Beacon server has PAM_ALLOW_DEV_HEADER=1).
+function renderEnvLocalExample({ slug }) {
+  return [
+    '# Local-only Beacon credentials for `npm start` / `jest`.',
+    '#',
+    '# Production builds run through the SWA Function proxy and never need',
+    `# these (see api/${slug}/index.js). Direct mode (NODE_ENV !== 'production')`,
+    '# requires both pairs.',
+    '#',
+    '# Copy to .env.local (gitignored) and fill in real values. Tokens are',
+    '# the same ones kept server-side in SWA Application Settings — see',
+    '# infrastructure/swa-api-template/README.md.',
+    '',
+    'REACT_APP_BEACON_URL=https://pam.wsq.io',
+    'REACT_APP_DB_ENV=dev',
+    '',
+    'REACT_APP_BEACON_USER_TOKEN_ID=',
+    'REACT_APP_BEACON_USER_TOKEN_SECRET=',
+    '',
+    'REACT_APP_BEACON_APP_TOKEN_ID=',
+    'REACT_APP_BEACON_APP_TOKEN_SECRET=',
+    '',
+    '# Stamps `X-Dev-Caller-Email` on outgoing requests so the Beacon',
+    '# `caller_email()` helper can identify you when running on localhost.',
+    '# Honored only when (a) hostname is `localhost`, (b) this var is set,',
+    '# and (c) the dev Beacon server has `PAM_ALLOW_DEV_HEADER=1`. Inert',
+    '# in prod (interceptor is gated on hostname === "localhost").',
+    'REACT_APP_DEV_USER=',
+    '',
+  ].join('\n');
+}
+
 module.exports = {
   slugToAppName,
   copyTreeWithSubstitution,
@@ -140,4 +179,5 @@ module.exports = {
   findSwaWorkflow,
   setApiLocationInWorkflow,
   renderAppSettingsExample,
+  renderEnvLocalExample,
 };
