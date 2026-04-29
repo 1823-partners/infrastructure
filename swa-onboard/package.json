@@ -1,0 +1,16 @@
+{
+  "name": "swa-onboard",
+  "version": "1.0.0",
+  "description": "Scaffolding CLI for onboarding 1823 SWAs onto the cross-app AAD + Beacon proxy paradigm. Run from infrastructure/, never published.",
+  "private": true,
+  "bin": {
+    "swa-onboard": "bin/swa-onboard.js"
+  },
+  "main": "src/index.js",
+  "scripts": {
+    "test": "node --test src/__tests__/*.test.js"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  }
+}
