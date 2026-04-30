@@ -17,13 +17,27 @@
 // What this does NOT do (intentional, see README):
 //   - Modify <app>/src/api/index.js (we don't know the app's API surface).
 //     Print explicit migration instructions instead.
-//   - Bump @1823-partners/core or run npm install.
 //   - Create the AAD app registration or set redirect URIs.
 //   - Set Azure app settings (operator does that in Portal).
+//
+// What this DOES do (now):
+//   - Bump @1823-partners/core to MIN_CORE_VERSION in <app>/package.json
+//     if it is below that floor (createAppTransport landed in 1.18.0; we
+//     pin to 1.19.1 because that's the version that fixed direct-mode
+//     env-var fallback). Re-runs are no-ops.
+//   - Run a clean install (`rm -rf node_modules/@1823-partners && npm i`)
+//     so the bumped version actually replaces the stale cached one. Plain
+//     `npm install` after a caret-bump is a no-op when the cached version
+//     already satisfies the new range.
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
+
+// Minimum @1823-partners/core that exposes `createAppTransport` with the
+// env-driven direct/proxy switch.
+const MIN_CORE_VERSION = '1.19.1';
 
 const {
   slugToAppName,
@@ -106,6 +120,18 @@ async function runInit({ appSlug, appDir, templatesDir, force }) {
     log(`wrote ${path.relative(appDir, envLocalExamplePath)}`);
   }
 
+  // 6. Bump @1823-partners/core in package.json (if below floor) and
+  //    refresh the npm install. We bust the @1823-partners/* cache before
+  //    `npm install` because a caret-bump alone is a no-op when the stale
+  //    cached version already satisfies the new range.
+  const bumped = bumpCoreInPackageJson(appDir);
+  if (bumped) {
+    log(`bumped @1823-partners/core to ^${MIN_CORE_VERSION} in package.json`);
+  } else {
+    log(`@1823-partners/core already at >= ${MIN_CORE_VERSION} — no bump needed`);
+  }
+  refreshNodeModules(appDir, log);
+
   process.stdout.write(
     [
       '',
@@ -115,17 +141,66 @@ async function runInit({ appSlug, appDir, templatesDir, force }) {
       `  2. Add ${appSlug}.<custom-domain>/.auth/login/aad/callback to the shared`,
       `     1823 SWA AAD app registration's redirect URIs (Authentication → Web).`,
       `  3. Migrate <app>/src/api/index.js to @1823-partners/core's createAppTransport:`,
+      `       import axios from 'axios';`,
       `       import { createAppTransport } from '@1823-partners/core';`,
-      `       const api = createAppTransport({ axios, appName: '${appSlug}', clientToken: CLIENT_TOKEN });`,
-      `     (proxy in prod, direct in dev/test — picked from NODE_ENV).`,
-      `  4. Bump @1823-partners/core to ^1.17.0 or later in <app>/package.json,`,
-      `     then \`npm install\` to update package-lock.json.`,
-      `  5. Commit, push to main → preview deploy, then cut a release-X.Y.Z branch`,
+      `       const api = createAppTransport({ axios, appName: '${appSlug}' });`,
+      `     (proxy in prod, direct in dev/test — picked from NODE_ENV; the`,
+      `     bundled beacon_user_token.json / beacon_app_token_*.json files`,
+      `     can be deleted along with their imports).`,
+      `  4. Commit, push to main → preview deploy, then cut a release-X.Y.Z branch`,
       `     for production.`,
-      `  6. Run: swa-onboard verify https://<your-preview-host> --app-slug ${appSlug}`,
+      `  5. Run: swa-onboard verify https://<your-preview-host> --app-slug ${appSlug}`,
       '',
     ].join('\n'),
   );
+}
+
+// Bump @1823-partners/core to ^MIN_CORE_VERSION if the existing caret/tilde
+// range is below the floor. Returns true if the file was rewritten.
+function bumpCoreInPackageJson(appDir) {
+  const pkgPath = path.join(appDir, 'package.json');
+  const pkgRaw = fs.readFileSync(pkgPath, 'utf8');
+  const pkg = JSON.parse(pkgRaw);
+  const target = `^${MIN_CORE_VERSION}`;
+  const dep = (pkg.dependencies && pkg.dependencies['@1823-partners/core']) || null;
+  if (!dep) {
+    // Not a consumer of core — leave alone.
+    return false;
+  }
+  // Strip leading range operators to get a plain semver to compare.
+  const m = dep.match(/^[\^~>=]*\s*(\d+)\.(\d+)\.(\d+)/);
+  if (m) {
+    const [maj, min, patch] = m.slice(1).map(Number);
+    const [tMaj, tMin, tPatch] = MIN_CORE_VERSION.split('.').map(Number);
+    const cmp =
+      maj !== tMaj ? maj - tMaj : min !== tMin ? min - tMin : patch - tPatch;
+    if (cmp >= 0) return false;
+  }
+  pkg.dependencies['@1823-partners/core'] = target;
+  // Preserve trailing newline if present.
+  const trailing = pkgRaw.endsWith('\n') ? '\n' : '';
+  fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + trailing);
+  return true;
+}
+
+// Bust the @1823-partners/* cache and run `npm install`. This is the fix
+// for the silent no-op where a caret-bump is satisfied by the already-
+// cached version, leaving node_modules out of date.
+function refreshNodeModules(appDir, log) {
+  const scopedDir = path.join(appDir, 'node_modules', '@1823-partners');
+  if (fs.existsSync(scopedDir)) {
+    fs.rmSync(scopedDir, { recursive: true, force: true });
+    log(`cleared node_modules/@1823-partners (cache-bust)`);
+  }
+  log(`running \`npm install\`…`);
+  try {
+    execFileSync('npm', ['install'], { cwd: appDir, stdio: 'inherit' });
+  } catch (err) {
+    throw new Error(
+      `\`npm install\` failed in ${appDir}. Check that NODE_AUTH_TOKEN is set ` +
+        `(GitHub Packages PAT with read:packages) and re-run.`,
+    );
+  }
 }
 
 module.exports = { runInit };

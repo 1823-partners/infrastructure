@@ -69,6 +69,11 @@ function findSwaWorkflow(appDir) {
 // Edit the consumer SWA workflow YAML so it sets `api_location: "api"` on
 // the reusable swa-deploy.yml call. Idempotent: re-running on an already-
 // configured workflow is a no-op.
+//
+// We do a targeted string insert rather than a YAML round-trip so the file
+// keeps its exact original formatting, comments, quoting, and key order.
+// `js-yaml` is used only as a structural sanity check (parse must succeed
+// and the call to swa-deploy.yml must exist).
 function setApiLocationInWorkflow(workflowPath) {
   const yaml = require('js-yaml');
   const original = fs.readFileSync(workflowPath, 'utf8');
@@ -78,20 +83,71 @@ function setApiLocationInWorkflow(workflowPath) {
       `Workflow at ${workflowPath} has no \`jobs:\` block — is this a SWA workflow?`,
     );
   }
-  let changed = false;
+  // Locate the swa-deploy.yml call and confirm it has a `with:` block we
+  // can extend; bail loudly if the workflow doesn't match the expected
+  // shape rather than silently writing nothing.
+  let target = null;
   for (const jobName of Object.keys(doc.jobs)) {
     const job = doc.jobs[jobName];
     if (!job || typeof job.uses !== 'string') continue;
     if (!job.uses.includes('infrastructure/.github/workflows/swa-deploy.yml')) continue;
-    job.with = job.with || {};
-    if (job.with.api_location !== 'api') {
-      job.with.api_location = 'api';
-      changed = true;
+    target = job;
+    break;
+  }
+  if (!target) {
+    throw new Error(
+      `Workflow at ${workflowPath} has no job calling swa-deploy.yml.`,
+    );
+  }
+  if (target.with && target.with.api_location === 'api') {
+    return false; // already configured
+  }
+
+  // Find the `with:` line under the swa-deploy job and insert
+  // `      api_location: api` directly under it. Indentation matches the
+  // sibling key (typically `azure_token_secret_name`).
+  const lines = original.split('\n');
+  let withLineIdx = -1;
+  for (let i = 0; i < lines.length; i += 1) {
+    // Find any `uses:` line that points at swa-deploy.yml; the next `with:`
+    // line in the same job is the one we want.
+    if (/^\s*uses:\s*.*swa-deploy\.yml/.test(lines[i])) {
+      for (let j = i + 1; j < lines.length; j += 1) {
+        if (/^\s*with:\s*$/.test(lines[j])) {
+          withLineIdx = j;
+          break;
+        }
+        // Stop searching if we hit a sibling key at the same/lesser indent
+        // that isn't `with:` — means the job has no `with:` block.
+        if (/^\s*\S/.test(lines[j]) && !/^\s*-/.test(lines[j])) {
+          if (/^\s*(secrets|needs|if|name|uses):/.test(lines[j])) {
+            // sibling key, continue looking only if same job
+          }
+        }
+      }
+      break;
     }
   }
-  if (!changed) return false;
-  const updated = yaml.dump(doc, { lineWidth: 120, noRefs: true });
-  fs.writeFileSync(workflowPath, updated);
+  if (withLineIdx === -1) {
+    throw new Error(
+      `Workflow at ${workflowPath} has no \`with:\` block under the swa-deploy.yml call.`,
+    );
+  }
+  // Indentation: take the indentation of the next non-blank line under
+  // `with:` if it exists (a sibling input like azure_token_secret_name);
+  // otherwise indent 2 spaces past `with:` itself.
+  const withIndent = lines[withLineIdx].match(/^(\s*)/)[1];
+  let insertIndent = withIndent + '  ';
+  for (let k = withLineIdx + 1; k < lines.length; k += 1) {
+    if (lines[k].trim() === '') continue;
+    const m = lines[k].match(/^(\s*)\S/);
+    if (m && m[1].length > withIndent.length) {
+      insertIndent = m[1];
+    }
+    break;
+  }
+  lines.splice(withLineIdx + 1, 0, `${insertIndent}api_location: api`);
+  fs.writeFileSync(workflowPath, lines.join('\n'));
   return true;
 }
 

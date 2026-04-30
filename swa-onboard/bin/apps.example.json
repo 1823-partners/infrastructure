@@ -1,0 +1,15 @@
+{
+  "_comment": "Sample config for swa-set-app-settings.sh. Copy to apps.json (gitignored) and fill in real swa_name values from Azure Portal -> Static Web Apps. The slug is the URL slug; app_name is the Beacon server slug (underscored) that the proxy hits as pam/<APP_NAME>/...",
+  "resource_group": "<your-resource-group>",
+  "global": {
+    "BEACON_URL": "https://pam.wsq.io",
+    "DB_ENV": "prod"
+  },
+  "apps": [
+    { "slug": "permissions",   "swa_name": "<az-resource-name>", "app_name": "permissions" },
+    { "slug": "browser",       "swa_name": "<az-resource-name>", "app_name": "browser" },
+    { "slug": "secmaster",     "swa_name": "<az-resource-name>", "app_name": "secmaster" },
+    { "slug": "otti",          "swa_name": "<az-resource-name>", "app_name": "otti" },
+    { "slug": "bob-dashboard", "swa_name": "<az-resource-name>", "app_name": "bob_dashboard" }
+  ]
+}

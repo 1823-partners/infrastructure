@@ -44,9 +44,13 @@ Scaffolds onto an existing SWA repo (must already have `package.json` and
 What it deliberately does **not** do:
 
 - **Modify `<app>/src/api/index.js`.** We don't know each app's API surface. The CLI prints the exact migration snippet (`createAppTransport`) for you to paste.
-- **Bump `@1823-partners/core`.** Bumping a frontend dep is one `npm install` away — keeping it in your hands lets you see the lock-file delta in the same commit as the migration.
 - **Create the AAD app reg or set redirect URIs.** That's a one-time Azure Portal action — see the SWA auth runbook.
-- **Set Azure app settings.** Same reason — Portal-only, and Preview vs. Production are independent.
+- **Set Azure app settings.** Out of band of the scaffold itself, but `bin/swa-set-app-settings.sh` (below) bulk-sets them via `az`.
+
+What it does that's worth flagging:
+
+- **Bumps `@1823-partners/core` to `^1.19.1`** in `package.json` (the version that ships `createAppTransport`'s env-driven proxy/direct switch). Does nothing if the existing range is already at or above the floor.
+- **Cache-busts and re-installs.** A plain `npm install` after a caret-bump is a no-op when the cached version already satisfies the new range; the CLI removes `node_modules/@1823-partners` first so the install actually picks up the new version.
 
 ### `verify <hostname>`
 
@@ -64,6 +68,39 @@ Exits non-zero if any check fails. Checks:
 4. **Slug consistency warning.** If the URL slug contains a hyphen, prints a reminder to set `APP_NAME=<slug-with-underscores>` (Beacon route is `pam/<APP_NAME>/...` and `APP_NAME` matches the `*_server.py` filename).
 
 The first check curls without cookies, so it'll show "unauthenticated" by default — open `/.auth/me` in a browser to verify the unmasked-email piece end-to-end. Future iteration could add a headless browser flow.
+
+## `swa-set-app-settings.sh` — bulk-set Azure SWA app settings
+
+Preview environments don't inherit app settings from Production, so every
+onboarded SWA needs its app settings written **twice** (once per env).
+This bash script wraps `az staticwebapp appsettings set` and iterates
+over every (app x environment) pair from a small JSON config plus a
+sourced secrets file.
+
+```bash
+cd infrastructure/swa-onboard/bin
+cp apps.example.json apps.json          # then fill in real swa_name + slugs
+cp secrets.example.env secrets.env      # then fill in real credentials (gitignored)
+
+# Preview the calls without touching Azure:
+./swa-set-app-settings.sh --config apps.json --secrets secrets.env \
+    --environments default,preview --dry-run
+
+# Apply (requires `az login` + correct subscription selected):
+./swa-set-app-settings.sh --config apps.json --secrets secrets.env \
+    --environments default,preview
+```
+
+Per-app secret env-var names follow the pattern
+`BEACON_APP_TOKEN_<UPPER_SLUG>_(ID|SECRET)` where `<UPPER_SLUG>` is the
+slug uppercased with `-` replaced by `_`
+(`bob-dashboard` -> `BOB_DASHBOARD`). Shared secrets (`AAD_CLIENT_*`,
+`BEACON_USER_TOKEN_*`, `NODE_AUTH_TOKEN`) are applied to every app.
+
+`apps.json` and `secrets.env` are gitignored; only the `*.example.*`
+templates are committed. The script does no Portal clicking and is safe
+to re-run (each call upserts the listed settings — it does not delete
+unrelated ones).
 
 ## Tests
 

@@ -1,1 +1,7 @@
 node_modules/
+
+# Filled-in operator inputs for swa-set-app-settings.sh — contain real
+# Azure resource names and Beacon credentials. Only the *.example.* files
+# are committed.
+bin/apps.json
+bin/secrets.env

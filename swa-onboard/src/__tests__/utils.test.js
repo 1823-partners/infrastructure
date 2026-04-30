@@ -100,6 +100,49 @@ test('setApiLocationInWorkflow rejects non-SWA workflow', () => {
   assert.throws(() => setApiLocationInWorkflow(wf), /no `jobs:` block/);
 });
 
+test('setApiLocationInWorkflow preserves original formatting', () => {
+  // The whole point of using a string insert (rather than a yaml
+  // round-trip) is that comments, quoting style, and key order in the
+  // existing workflow stay intact. Lock that in with a representative
+  // sample.
+  const dir = tmpDir('swa-onboard-wf3-');
+  const wf = path.join(dir, 'azure-static-web-apps-pretty-flower-abc.yml');
+  const original = [
+    'name: Azure Static Web Apps CI/CD',
+    '',
+    '# Deploy on push to main and any release-* branch.',
+    'on:',
+    '  push:',
+    "    branches: ['main', 'release-*']",
+    '  pull_request:',
+    '    types: [opened, synchronize, reopened, closed]',
+    '    branches: [main]',
+    '',
+    'jobs:',
+    '  deploy:',
+    '    uses: 1823-partners/infrastructure/.github/workflows/swa-deploy.yml@main',
+    '    with:',
+    '      azure_token_secret_name: AZURE_STATIC_WEB_APPS_API_TOKEN_PRETTY_FLOWER_ABC',
+    '    secrets: inherit',
+    '',
+  ].join('\n');
+  fs.writeFileSync(wf, original);
+
+  setApiLocationInWorkflow(wf);
+  const updated = fs.readFileSync(wf, 'utf8');
+
+  // The comment, single-quoted branch list, and bracketed `types:` list
+  // all survive untouched — every YAML round-trip would normalize them.
+  assert.match(updated, /# Deploy on push to main and any release-\* branch\./);
+  assert.match(updated, /branches: \['main', 'release-\*'\]/);
+  assert.match(updated, /types: \[opened, synchronize, reopened, closed\]/);
+  // The new line is inserted directly under `with:` at the right indent.
+  assert.match(
+    updated,
+    /\n {4}with:\n {6}api_location: api\n {6}azure_token_secret_name: /,
+  );
+});
+
 test('renderEnvLocalExample includes REACT_APP_DEV_USER and beacon vars', () => {
   // Devs need both the direct-mode Beacon credentials and the dev-caller
   // email var so the X-Dev-Caller-Email interceptor in @1823-partners/core

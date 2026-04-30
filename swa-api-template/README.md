@@ -110,15 +110,26 @@ instance pays exactly one handshake.
    - Hit `/api/<slug>/<known-endpoint>` from the deployed app and
      confirm a 200 with the expected body.
    - **Verify the bundle is credential-free.** Grep the production
-     bundle for the user-token id and app-token id; both must be
-     absent:
+     bundle for *values* of the form `"token_id":"…"` /
+     `"token_secret":"…"`. Matching identifiers (`token_id` alone) is
+     too lax — webpack inlines plenty of harmless property names that
+     happen to share the substring. The pattern below only matches
+     when the key is followed by a quoted string literal that starts
+     with an alphanumeric (i.e. a real credential value); both must
+     be absent:
      ```bash
      curl -s https://<host>/static/js/main.*.js \
-       | grep -c -E 'token_(id|secret)|client_(id|secret)'
+       | grep -c -E '"(token|client)_(id|secret)":\s*"[A-Za-z0-9]'
      # Expect: 0
      ```
-   - Confirm no `beacon_*_token*.json` strings remain in the served
-     bundle either.
+   - Also confirm no `beacon_*_token*.json` filename strings remain in
+     the served bundle (a stale import path leaks the original
+     credential file name even after the values are gone):
+     ```bash
+     curl -s https://<host>/static/js/main.*.js \
+       | grep -c -E 'beacon_(user|app)_token[A-Za-z_]*\.json'
+     # Expect: 0
+     ```
 
 ## Files in this template
 
