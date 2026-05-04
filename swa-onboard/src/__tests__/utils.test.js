@@ -13,6 +13,7 @@ const {
   setApiLocationInWorkflow,
   renderAppSettingsExample,
   renderEnvLocalExample,
+  findSwaWorkflow,
 } = require('../utils');
 
 function tmpDir(prefix) {
@@ -140,6 +141,37 @@ test('setApiLocationInWorkflow preserves original formatting', () => {
   assert.match(
     updated,
     /\n {4}with:\n {6}api_location: api\n {6}azure_token_secret_name: /,
+  );
+});
+
+test('findSwaWorkflow returns null when no workflow matches', () => {
+  const dir = tmpDir('swa-onboard-find-empty-');
+  fs.mkdirSync(path.join(dir, '.github', 'workflows'), { recursive: true });
+  assert.equal(findSwaWorkflow(dir), null);
+});
+
+test('findSwaWorkflow returns the single matching workflow', () => {
+  const dir = tmpDir('swa-onboard-find-one-');
+  const wfDir = path.join(dir, '.github', 'workflows');
+  fs.mkdirSync(wfDir, { recursive: true });
+  const wf = path.join(wfDir, 'azure-static-web-apps-pretty-flower-abc.yml');
+  fs.writeFileSync(wf, '');
+  assert.equal(findSwaWorkflow(dir), wf);
+});
+
+test('findSwaWorkflow refuses to choose between multiple workflows', () => {
+  // Dormant siblings are an auth side-channel: if we silently patched
+  // one and left the other untouched, the dormant SWA would still
+  // serve traffic — potentially without proper AAD config. Force the
+  // operator to consolidate before onboarding.
+  const dir = tmpDir('swa-onboard-find-many-');
+  const wfDir = path.join(dir, '.github', 'workflows');
+  fs.mkdirSync(wfDir, { recursive: true });
+  fs.writeFileSync(path.join(wfDir, 'azure-static-web-apps-canonical-001.yml'), '');
+  fs.writeFileSync(path.join(wfDir, 'azure-static-web-apps-dormant-002.yml'), '');
+  assert.throws(
+    () => findSwaWorkflow(dir),
+    /Multiple SWA workflows found[\s\S]+canonical-001[\s\S]+dormant-002[\s\S]+Delete the dormant ones/,
   );
 });
 

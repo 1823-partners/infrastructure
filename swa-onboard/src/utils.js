@@ -56,6 +56,13 @@ function copyFileWithSubstitution({ src, dest, slug, force }) {
 // Find the SWA workflow file in `<appDir>/.github/workflows/`. Returns the
 // absolute path or null. We match `azure-static-web-apps-*.yml` since that's
 // the convention emitted by Azure's wizard for every existing 1823 SWA.
+//
+// If multiple matching workflows exist, we refuse to guess which one is
+// canonical — the CLI should not silently patch one and leave dormant
+// siblings alone. Dormant SWAs that ship an unconfigured proxy bundle
+// are an auth side-channel; the operator must consolidate to a single
+// workflow before onboarding (delete the dormant one, or rename so only
+// the canonical hostname's workflow matches the pattern).
 function findSwaWorkflow(appDir) {
   const workflowDir = path.join(appDir, '.github', 'workflows');
   if (!fs.existsSync(workflowDir)) return null;
@@ -63,6 +70,14 @@ function findSwaWorkflow(appDir) {
     .readdirSync(workflowDir)
     .filter((f) => /^azure-static-web-apps-.*\.ya?ml$/.test(f));
   if (matches.length === 0) return null;
+  if (matches.length > 1) {
+    throw new Error(
+      `Multiple SWA workflows found in ${workflowDir}:\n  - ${matches.join('\n  - ')}\n` +
+        'Refusing to guess which is canonical. Delete the dormant ones (and the\n' +
+        'corresponding Azure SWA resources) so only one workflow remains, then\n' +
+        're-run swa-onboard.',
+    );
+  }
   return path.join(workflowDir, matches[0]);
 }
 
