@@ -1,7 +1,7 @@
 # SWA static config template
 
 Canonical `staticwebapp.config.json` for 1823 SWAs. Copy into your app's
-repo root and replace `__APP__` with the app's URL slug.
+repo root as-is — no per-app substitution needed.
 
 ## Why
 
@@ -21,9 +21,12 @@ Once a SWA is on this config, the backend can trust the
 1. Copy `staticwebapp.config.json` into your app's repo root (replacing
    any existing one). Keep your app's existing routes if they differ;
    only the `auth` block and `responseOverrides` are mandatory.
-2. Replace `__APP__` in the routes block with your app's URL slug.
+2. Keep the `/api/*` route as-is. It gates **every** Function on the SWA
+   behind AAD authentication — anonymous callers can't reach the proxy
+   even if a future function is mounted outside `/api/<app>/`.
    - If your app does **not** use the Function proxy (`api_location`
-     unset in your workflow), delete the `/api/__APP__/*` route entirely.
+     unset in your workflow), the route is harmless (no functions exist)
+     but you may delete it.
 3. Add the SWA hostname's redirect URI to the shared AAD app
    registration `pam-swa-shared` (Azure Portal → App registrations →
    pam-swa-shared → Authentication → Web → Add URI):
@@ -51,7 +54,6 @@ Once a SWA is on this config, the backend can trust the
 ## Reference: working example
 
 The `permissions` SWA was the first adopter:
-- `permissions/staticwebapp.config.json` — same shape as this template,
-  with `__APP__` already replaced by `permissions`.
+- `permissions/staticwebapp.config.json` — same shape as this template.
 - `permissions/api/permissions/index.js` — proxy that consumes the
   verified principal header. See `infrastructure/swa-api-template/`.
