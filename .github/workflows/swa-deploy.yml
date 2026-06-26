@@ -125,6 +125,154 @@ jobs:
           api_location: ${{ inputs.api_location }}
           skip_app_build: true
 
+  core_version_check:
+    # Non-blocking guard: warns (annotation + job summary + sticky PR comment)
+    # when the app's @1823-partners/core version is behind the latest published
+    # release. Runs in parallel with build_and_deploy and NEVER fails the run,
+    # so it can never block a deploy. Inherited by every app that calls this
+    # reusable workflow — no per-app configuration required.
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.action != 'closed')
+    runs-on: ubuntu-latest
+    name: Core Version Check
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@1823-partners"
+
+      - name: Check @1823-partners/core is current
+        uses: actions/github-script@v7
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          script: |
+            const fs = require('fs');
+            const { execSync } = require('child_process');
+            const PKG = '@1823-partners/core';
+            const MARKER = '<!-- 1823-core-version-check -->';
+
+            const parse = (v) => {
+              if (!v) return null;
+              const m = String(v).trim().replace(/^[\^~>=v\s]+/, '').match(/(\d+)\.(\d+)\.(\d+)/);
+              return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+            };
+            const cmp = (a, b) => {
+              for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] - b[i];
+              return 0;
+            };
+
+            // Declared range from package.json
+            let declared = null;
+            try {
+              const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+              declared = (pkg.dependencies && pkg.dependencies[PKG]) ||
+                         (pkg.devDependencies && pkg.devDependencies[PKG]) || null;
+            } catch (e) {}
+
+            if (!declared) {
+              core.info(`${PKG} is not a dependency of this app — skipping core version check.`);
+              return;
+            }
+
+            // Resolved version that actually ships (lockfile is the source of truth)
+            let resolved = null;
+            try {
+              const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
+              const entry = (lock.packages && (lock.packages[`node_modules/${PKG}`] || lock.packages[PKG])) ||
+                            (lock.dependencies && lock.dependencies[PKG]);
+              resolved = entry && entry.version ? entry.version : null;
+            } catch (e) {}
+
+            // Latest published version from GitHub Packages
+            let latest = null;
+            try {
+              latest = execSync(`npm view ${PKG} version`, { encoding: 'utf8' }).trim();
+            } catch (e) {
+              core.warning(`Could not query the latest ${PKG} version from the registry: ${e.message}`);
+              return; // non-blocking — never fail the run
+            }
+
+            const effective = resolved || declared;
+            const cur = parse(effective);
+            const lat = parse(latest);
+            if (!cur || !lat) {
+              core.info(`Unable to parse versions (current=${effective}, latest=${latest}); skipping.`);
+              return;
+            }
+
+            const behind = cmp(cur, lat) < 0;
+            const curStr = cur.join('.');
+            const headline = behind
+              ? `⚠️ \`${PKG}\` is behind — this app ships **${curStr}**, latest is **${latest}**.`
+              : `✅ \`${PKG}\` is up to date (**${curStr}**).`;
+
+            await core.summary
+              .addHeading('1823 Core Dependency Check', 3)
+              .addRaw(headline).addEOL().addEOL()
+              .addTable([
+                [{ data: 'Field', header: true }, { data: 'Value', header: true }],
+                ['Declared range', declared || '—'],
+                ['Resolved (lockfile)', resolved || '—'],
+                ['Latest published', latest],
+              ])
+              .write();
+
+            if (behind) {
+              core.warning(
+                `${PKG} is ${curStr} but the latest published version is ${latest}. ` +
+                `Bump it with: npm install ${PKG}@^${latest} (and commit the updated package-lock.json).`,
+                { title: '1823 Core dependency is behind' }
+              );
+            } else {
+              core.info(headline);
+            }
+
+            // On PRs, keep a single sticky comment that self-resolves to ✅ when fixed.
+            // Wrapped so a comment-API hiccup can never fail this (non-blocking) job.
+            if (context.eventName === 'pull_request' && context.issue && context.issue.number) {
+              try {
+                const { owner, repo } = context.repo;
+                const issue_number = context.issue.number;
+                const body = [
+                  MARKER,
+                  '### 1823 Core Dependency Check',
+                  '',
+                  headline,
+                  '',
+                  '| Field | Value |',
+                  '| --- | --- |',
+                  `| Declared range | \`${declared || '—'}\` |`,
+                  `| Resolved (lockfile) | \`${resolved || '—'}\` |`,
+                  `| Latest published | \`${latest}\` |`,
+                  ...(behind ? ['', `> Bump with \`npm install ${PKG}@^${latest}\` and commit the updated \`package-lock.json\`.`] : []),
+                ].join('\n');
+
+                const { data: comments } = await github.rest.issues.listComments({
+                  owner, repo, issue_number, per_page: 100,
+                });
+                const existing = comments.find((c) => c.body && c.body.includes(MARKER));
+
+                if (behind) {
+                  if (existing) {
+                    await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+                  } else {
+                    await github.rest.issues.createComment({ owner, repo, issue_number, body });
+                  }
+                } else if (existing) {
+                  // Was behind, now current — flip the existing comment to ✅ instead of leaving stale text.
+                  await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+                }
+              } catch (e) {
+                core.warning(`Could not post the PR comment for the core version check: ${e.message}`);
+              }
+            }
+
   close_pull_request:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
     runs-on: ubuntu-latest
