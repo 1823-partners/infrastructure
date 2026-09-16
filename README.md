@@ -59,6 +59,21 @@ permissions:
   pull-requests: write  # For PR deployment comments
 ```
 
+### `swa-deploy-sandbox.yml` — the same pipeline for 1823-sandbox apps
+
+Sandbox-scaffolded apps keep their Vite frontend in `frontend/`, test with vitest, and ship a Python Azure Functions API in `api/`. They call `swa-deploy-sandbox.yml` instead of `swa-deploy.yml`; only the token secret name is required:
+
+```yaml
+jobs:
+  deploy:
+    uses: 1823-partners/infrastructure/.github/workflows/swa-deploy-sandbox.yml@main
+    with:
+      azure_token_secret_name: AZURE_STATIC_WEB_APPS_API_TOKEN_YOUR_APP
+    secrets: inherit
+```
+
+Same release model and check names as `swa-deploy.yml` (`deploy / Build and Deploy`, `deploy / Core Version Check`). Optional inputs: `node_version`, `python_version`, `run_tests`, `test_args`, `app_dir` (default `frontend`), `api_location` (default `api`). The Python runtime is selected by `platform.apiRuntime` in the app's `staticwebapp.config.json`.
+
 ## Adding a New App
 
 1. Create the Azure Static Web App resource in Azure Portal

@@ -1,0 +1,315 @@
+# Reusable Azure Static Web Apps CI/CD workflow for 1823-sandbox apps.
+#
+# Sandbox-scaffolded apps differ from the CRA frontends that use swa-deploy.yml:
+# the Vite frontend (package.json, build/) lives in frontend/, unit tests run
+# with vitest (which rejects the jest-only --watchAll flag), and the API is a
+# Python Azure Functions app in api/ whose runtime is pinned by
+# platform.apiRuntime in frontend/public/staticwebapp.config.json. This
+# workflow is the sandbox counterpart of swa-deploy.yml; swa-deploy.yml itself
+# is unchanged and remains the workflow for every other frontend.
+#
+# Usage in a sandbox app:
+#
+#   name: Azure Static Web Apps CI/CD
+#   on:
+#     push:
+#       branches: [main, release-*]
+#     pull_request:
+#       types: [opened, synchronize, reopened, closed]
+#       branches: [main, release-*]
+#
+#   jobs:
+#     deploy:
+#       uses: 1823-partners/infrastructure/.github/workflows/swa-deploy-sandbox.yml@main
+#       with:
+#         azure_token_secret_name: AZURE_STATIC_WEB_APPS_API_TOKEN_...
+#       secrets: inherit
+#
+# Release model (same as swa-deploy.yml): push to main -> preview environment,
+# push to release-* -> production, pull requests build and test only.
+
+name: SWA Deploy for sandbox apps (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      azure_token_secret_name:
+        description: "Name of the Azure SWA API token secret (e.g., AZURE_STATIC_WEB_APPS_API_TOKEN_PROUD_MUSHROOM_085FDF20F)"
+        required: true
+        type: string
+      node_version:
+        description: "Node.js version to use"
+        required: false
+        type: string
+        default: "22"
+      python_version:
+        description: "Python version for the API tests; match platform.apiRuntime in staticwebapp.config.json"
+        required: false
+        type: string
+        default: "3.11"
+      run_tests:
+        description: "Whether to run the frontend (vitest) and API (pytest) tests before deploying"
+        required: false
+        type: boolean
+        default: true
+      test_args:
+        description: "Extra arguments appended to `npm test` (vitest)"
+        required: false
+        type: string
+        default: ""
+      app_dir:
+        description: "Frontend directory holding package.json and its build/ output"
+        required: false
+        type: string
+        default: "frontend"
+      api_location:
+        description: "Python Azure Functions API folder, relative to repo root. Empty string means no API."
+        required: false
+        type: string
+        default: "api"
+
+permissions:
+  contents: read
+  packages: read
+  pull-requests: write
+
+jobs:
+  build_and_deploy:
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.action != 'closed')
+    runs-on: ubuntu-latest
+    name: Build and Deploy
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@1823-partners"
+
+      - name: Install frontend dependencies
+        working-directory: ${{ inputs.app_dir }}
+        run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Sandbox apps carry playwright as a devDependency for a local smoke
+          # test; never pull browsers in CI.
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+
+      - name: Frontend unit tests (vitest)
+        if: inputs.run_tests
+        working-directory: ${{ inputs.app_dir }}
+        env:
+          CI: "true"
+          TEST_ARGS: ${{ inputs.test_args }}
+        run: npm test -- $TEST_ARGS
+
+      - name: Setup Python
+        if: inputs.run_tests && inputs.api_location != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: API unit tests (pytest)
+        if: inputs.run_tests && inputs.api_location != ''
+        working-directory: ${{ inputs.api_location }}
+        run: |
+          pip install -r requirements.txt
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          if [ -d tests ]; then python -m pytest tests -q; else echo "no tests/ directory; skipping pytest"; fi
+
+      - name: Build frontend
+        working-directory: ${{ inputs.app_dir }}
+        env:
+          CI: "false"
+        run: npm run build
+
+      - name: Deploy main → preview
+        if: github.ref == 'refs/heads/main'
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets[inputs.azure_token_secret_name] }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: "upload"
+          app_location: ${{ inputs.app_dir }}/build
+          api_location: ${{ inputs.api_location }}
+          skip_app_build: true
+          deployment_environment: "preview"
+
+      - name: Deploy release → production
+        if: startsWith(github.ref, 'refs/heads/release-')
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets[inputs.azure_token_secret_name] }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: "upload"
+          app_location: ${{ inputs.app_dir }}/build
+          api_location: ${{ inputs.api_location }}
+          skip_app_build: true
+
+  core_version_check:
+    # Non-blocking guard: warns (annotation + job summary + sticky PR comment)
+    # when the app's @1823-partners/core version is behind the latest published
+    # release. Runs in parallel with build_and_deploy and NEVER fails the run,
+    # so it can never block a deploy. Inherited by every app that calls this
+    # reusable workflow — no per-app configuration required.
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.action != 'closed')
+    runs-on: ubuntu-latest
+    name: Core Version Check
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@1823-partners"
+
+      - name: Check @1823-partners/core is current
+        uses: actions/github-script@v7
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APP_DIR: ${{ inputs.app_dir }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const appDir = process.env.APP_DIR || 'frontend';
+            const { execSync } = require('child_process');
+            const PKG = '@1823-partners/core';
+            const MARKER = '<!-- 1823-core-version-check -->';
+
+            const parse = (v) => {
+              if (!v) return null;
+              const m = String(v).trim().replace(/^[\^~>=v\s]+/, '').match(/(\d+)\.(\d+)\.(\d+)/);
+              return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+            };
+            const cmp = (a, b) => {
+              for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] - b[i];
+              return 0;
+            };
+
+            // Declared range from package.json
+            let declared = null;
+            try {
+              const pkg = JSON.parse(fs.readFileSync(path.join(appDir, 'package.json'), 'utf8'));
+              declared = (pkg.dependencies && pkg.dependencies[PKG]) ||
+                         (pkg.devDependencies && pkg.devDependencies[PKG]) || null;
+            } catch (e) {}
+
+            if (!declared) {
+              core.info(`${PKG} is not a dependency of this app — skipping core version check.`);
+              return;
+            }
+
+            // Resolved version that actually ships (lockfile is the source of truth)
+            let resolved = null;
+            try {
+              const lock = JSON.parse(fs.readFileSync(path.join(appDir, 'package-lock.json'), 'utf8'));
+              const entry = (lock.packages && (lock.packages[`node_modules/${PKG}`] || lock.packages[PKG])) ||
+                            (lock.dependencies && lock.dependencies[PKG]);
+              resolved = entry && entry.version ? entry.version : null;
+            } catch (e) {}
+
+            // Latest published version from GitHub Packages
+            let latest = null;
+            try {
+              latest = execSync(`npm view ${PKG} version`, { encoding: 'utf8' }).trim();
+            } catch (e) {
+              core.warning(`Could not query the latest ${PKG} version from the registry: ${e.message}`);
+              return; // non-blocking — never fail the run
+            }
+
+            const effective = resolved || declared;
+            const cur = parse(effective);
+            const lat = parse(latest);
+            if (!cur || !lat) {
+              core.info(`Unable to parse versions (current=${effective}, latest=${latest}); skipping.`);
+              return;
+            }
+
+            const behind = cmp(cur, lat) < 0;
+            const curStr = cur.join('.');
+            const headline = behind
+              ? `⚠️ \`${PKG}\` is behind — this app ships **${curStr}**, latest is **${latest}**.`
+              : `✅ \`${PKG}\` is up to date (**${curStr}**).`;
+
+            await core.summary
+              .addHeading('1823 Core Dependency Check', 3)
+              .addRaw(headline).addEOL().addEOL()
+              .addTable([
+                [{ data: 'Field', header: true }, { data: 'Value', header: true }],
+                ['Declared range', declared || '—'],
+                ['Resolved (lockfile)', resolved || '—'],
+                ['Latest published', latest],
+              ])
+              .write();
+
+            if (behind) {
+              core.warning(
+                `${PKG} is ${curStr} but the latest published version is ${latest}. ` +
+                `Bump it with: npm install ${PKG}@^${latest} (and commit the updated package-lock.json).`,
+                { title: '1823 Core dependency is behind' }
+              );
+            } else {
+              core.info(headline);
+            }
+
+            // On PRs, keep a single sticky comment that self-resolves to ✅ when fixed.
+            // Wrapped so a comment-API hiccup can never fail this (non-blocking) job.
+            if (context.eventName === 'pull_request' && context.issue && context.issue.number) {
+              try {
+                const { owner, repo } = context.repo;
+                const issue_number = context.issue.number;
+                const body = [
+                  MARKER,
+                  '### 1823 Core Dependency Check',
+                  '',
+                  headline,
+                  '',
+                  '| Field | Value |',
+                  '| --- | --- |',
+                  `| Declared range | \`${declared || '—'}\` |`,
+                  `| Resolved (lockfile) | \`${resolved || '—'}\` |`,
+                  `| Latest published | \`${latest}\` |`,
+                  ...(behind ? ['', `> Bump with \`npm install ${PKG}@^${latest}\` and commit the updated \`package-lock.json\`.`] : []),
+                ].join('\n');
+
+                const { data: comments } = await github.rest.issues.listComments({
+                  owner, repo, issue_number, per_page: 100,
+                });
+                const existing = comments.find((c) => c.body && c.body.includes(MARKER));
+
+                if (behind) {
+                  if (existing) {
+                    await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+                  } else {
+                    await github.rest.issues.createComment({ owner, repo, issue_number, body });
+                  }
+                } else if (existing) {
+                  // Was behind, now current — flip the existing comment to ✅ instead of leaving stale text.
+                  await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+                }
+              } catch (e) {
+                core.warning(`Could not post the PR comment for the core version check: ${e.message}`);
+              }
+            }
+
+  close_pull_request:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    name: Close Pull Request
+    steps:
+      - name: Close Pull Request
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets[inputs.azure_token_secret_name] }}
+          action: "close"
