@@ -49,6 +49,28 @@ jobs:
 | `node_version` | No | `"22"` | Node.js version |
 | `run_tests` | No | `true` | Whether to run unit tests before deploy |
 | `test_args` | No | `""` | Extra arguments for `npm test` |
+| `api_location` | No | `""` | Path to the SWA-managed Azure Functions API folder, relative to repo root. Empty string means no API. |
+| `app_dir` | No | `"."` | Directory holding the frontend `package.json` and its `build/` output. Sandbox apps pass `"frontend"`. |
+| `test_command` | No | `"npm test -- --watchAll=false"` | Command that runs the unit tests (`test_args` appended). vitest apps pass `"npm test"` because vitest rejects `--watchAll`. |
+| `python_api` | No | `false` | When `api_location` holds a Python Azure Functions app: `pip install` its `requirements(-dev).txt` and run `pytest` on `tests/` before deploying. |
+| `python_version` | No | `"3.11"` | Python version for `python_api` tests; match `platform.apiRuntime` in `staticwebapp.config.json`. |
+
+#### Sandbox-scaffolded apps (Vite `frontend/` + Python `api/`)
+
+```yaml
+jobs:
+  deploy:
+    uses: 1823-partners/infrastructure/.github/workflows/swa-deploy.yml@main
+    with:
+      azure_token_secret_name: AZURE_STATIC_WEB_APPS_API_TOKEN_YOUR_APP
+      app_dir: frontend
+      api_location: api
+      python_api: true
+      test_command: npm test
+    secrets: inherit
+```
+
+The Python runtime itself is selected by `platform.apiRuntime` in the app's `staticwebapp.config.json` (Oryx builds `api/` inside the deploy action); `python_api` only adds the pre-deploy test step.
 
 #### Permissions Required
 

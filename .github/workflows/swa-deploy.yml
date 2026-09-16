@@ -16,6 +16,16 @@
 #       with:
 #         azure_token_secret_name: AZURE_STATIC_WEB_APPS_API_TOKEN_KIND_POND_0B830B30F
 #       secrets: inherit
+#
+# Sandbox-scaffolded apps (Vite frontend in frontend/, Python Azure Functions
+# API in api/) use the same workflow with three extra inputs:
+#
+#       with:
+#         azure_token_secret_name: AZURE_STATIC_WEB_APPS_API_TOKEN_...
+#         app_dir: frontend        # package.json + build/ live here, not at the root
+#         api_location: api
+#         python_api: true         # pip install + pytest in api/ before deploying
+#         test_command: npm test   # vitest rejects the jest-only --watchAll flag
 
 name: SWA Deploy (reusable)
 
@@ -46,6 +56,26 @@ on:
         required: false
         type: string
         default: ""
+      app_dir:
+        description: "Directory holding the frontend package.json and its build/ output, relative to repo root. Default is the repo root (CRA layout); sandbox apps pass \"frontend\"."
+        required: false
+        type: string
+        default: "."
+      test_command:
+        description: "Command that runs the unit tests; test_args is appended. Default is the CRA/jest form. vitest apps pass \"npm test\" because vitest rejects --watchAll."
+        required: false
+        type: string
+        default: "npm test -- --watchAll=false"
+      python_api:
+        description: "Set true when api_location holds a Python Azure Functions app: installs its requirements(-dev).txt and runs pytest on its tests/ folder before deploying."
+        required: false
+        type: boolean
+        default: false
+      python_version:
+        description: "Python version used for python_api tests. Match platform.apiRuntime in staticwebapp.config.json."
+        required: false
+        type: string
+        default: "3.11"
 
 permissions:
   contents: read
@@ -72,25 +102,47 @@ jobs:
           scope: "@1823-partners"
 
       - name: Install dependencies
+        working-directory: ${{ inputs.app_dir }}
         run: npm ci
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Sandbox apps carry playwright as a devDependency for a local smoke
+          # test; never pull browsers in CI. No-op for apps without it.
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
 
       - name: Run unit tests
         if: inputs.run_tests
+        working-directory: ${{ inputs.app_dir }}
         env:
           CI: "true"
+          TEST_CMD: ${{ inputs.test_command }}
           TEST_ARGS: ${{ inputs.test_args }}
-        run: npm test -- --watchAll=false $TEST_ARGS
+        run: $TEST_CMD $TEST_ARGS
+
+      - name: Setup Python
+        if: inputs.python_api && inputs.api_location != ''
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Run API tests
+        if: inputs.python_api && inputs.api_location != ''
+        working-directory: ${{ inputs.api_location }}
+        run: |
+          pip install -r requirements.txt
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          if [ -d tests ]; then python -m pytest tests -q; else echo "no tests/ directory in ${{ inputs.api_location }}; skipping pytest"; fi
 
       - name: Prepare preview env
         if: github.ref == 'refs/heads/main'
+        working-directory: ${{ inputs.app_dir }}
         run: |
           if [ -f .env.preview ]; then
             cp .env.preview .env.production.local
           fi
 
       - name: Build
+        working-directory: ${{ inputs.app_dir }}
         env:
           CI: "false"
         run: npm run build
@@ -107,7 +159,7 @@ jobs:
           azure_static_web_apps_api_token: ${{ secrets[inputs.azure_token_secret_name] }}
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           action: "upload"
-          app_location: "build"
+          app_location: ${{ inputs.app_dir }}/build
           api_location: ${{ inputs.api_location }}
           skip_app_build: true
           deployment_environment: "preview"
@@ -121,7 +173,7 @@ jobs:
           azure_static_web_apps_api_token: ${{ secrets[inputs.azure_token_secret_name] }}
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           action: "upload"
-          app_location: "build"
+          app_location: ${{ inputs.app_dir }}/build
           api_location: ${{ inputs.api_location }}
           skip_app_build: true
 
@@ -150,9 +202,12 @@ jobs:
         uses: actions/github-script@v7
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APP_DIR: ${{ inputs.app_dir }}
         with:
           script: |
             const fs = require('fs');
+            const path = require('path');
+            const appDir = process.env.APP_DIR || '.';
             const { execSync } = require('child_process');
             const PKG = '@1823-partners/core';
             const MARKER = '<!-- 1823-core-version-check -->';
@@ -170,7 +225,7 @@ jobs:
             // Declared range from package.json
             let declared = null;
             try {
-              const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+              const pkg = JSON.parse(fs.readFileSync(path.join(appDir, 'package.json'), 'utf8'));
               declared = (pkg.dependencies && pkg.dependencies[PKG]) ||
                          (pkg.devDependencies && pkg.devDependencies[PKG]) || null;
             } catch (e) {}
@@ -183,7 +238,7 @@ jobs:
             // Resolved version that actually ships (lockfile is the source of truth)
             let resolved = null;
             try {
-              const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
+              const lock = JSON.parse(fs.readFileSync(path.join(appDir, 'package-lock.json'), 'utf8'));
               const entry = (lock.packages && (lock.packages[`node_modules/${PKG}`] || lock.packages[PKG])) ||
                             (lock.dependencies && lock.dependencies[PKG]);
               resolved = entry && entry.version ? entry.version : null;
