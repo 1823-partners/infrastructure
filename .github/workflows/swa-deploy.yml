@@ -189,28 +189,48 @@ jobs:
               resolved = entry && entry.version ? entry.version : null;
             } catch (e) {}
 
-            // Latest published version from GitHub Packages
-            let latest = null;
+            // Every published version. The app is compared only with the latest
+            // release in its OWN major line: a new major is never a routine bump.
+            // core 2.x is Deacon-only, and a Beacon app on 1.x must not be told
+            // to take it.
+            let publishedRaw = null;
             try {
-              latest = execSync(`npm view ${PKG} version`, { encoding: 'utf8' }).trim();
+              publishedRaw = JSON.parse(execSync(`npm view ${PKG} versions --json`, { encoding: 'utf8' }));
             } catch (e) {
-              core.warning(`Could not query the latest ${PKG} version from the registry: ${e.message}`);
+              core.warning(`Could not query the published ${PKG} versions from the registry: ${e.message}`);
               return; // non-blocking — never fail the run
             }
 
             const effective = resolved || declared;
             const cur = parse(effective);
-            const lat = parse(latest);
-            if (!cur || !lat) {
-              core.info(`Unable to parse versions (current=${effective}, latest=${latest}); skipping.`);
+            const published = (Array.isArray(publishedRaw) ? publishedRaw : [publishedRaw])
+              .filter((v) => typeof v === 'string' && !v.includes('-')) // no prereleases
+              .map(parse)
+              .filter(Boolean)
+              .sort(cmp);
+            if (!cur || !published.length) {
+              core.info(`Unable to parse versions (current=${effective}); skipping.`);
               return;
             }
+            const sameMajor = published.filter((v) => v[0] === cur[0]);
+            if (!sameMajor.length) {
+              core.info(`No published ${PKG} ${cur[0]}.x release to compare with; skipping.`);
+              return;
+            }
+            const latest = sameMajor[sameMajor.length - 1].join('.');
+            const newest = published[published.length - 1];
+            const newerMajor = newest[0] > cur[0] ? newest.join('.') : null;
 
-            const behind = cmp(cur, lat) < 0;
+            const behind = cmp(cur, sameMajor[sameMajor.length - 1]) < 0;
             const curStr = cur.join('.');
-            const headline = behind
-              ? `⚠️ \`${PKG}\` is behind — this app ships **${curStr}**, latest is **${latest}**.`
-              : `✅ \`${PKG}\` is up to date (**${curStr}**).`;
+            const majorNote = !newerMajor
+              ? ''
+              : cur[0] === 1
+                ? ` ${PKG} ${newerMajor} exists but is **Deacon-only**: a Beacon app stays on 1.x and moves to 2.x only as part of its Beacon → Deacon migration (1823-core \`docs/MIGRATING_TO_2.md\`).`
+                : ` ${PKG} ${newerMajor} is a new major; upgrade deliberately, never as a routine bump.`;
+            const headline = (behind
+              ? `⚠️ \`${PKG}\` is behind — this app ships **${curStr}**, latest ${cur[0]}.x is **${latest}**.`
+              : `✅ \`${PKG}\` is up to date for ${cur[0]}.x (**${curStr}**).`) + majorNote;
 
             await core.summary
               .addHeading('1823 Core Dependency Check', 3)
@@ -219,13 +239,14 @@ jobs:
                 [{ data: 'Field', header: true }, { data: 'Value', header: true }],
                 ['Declared range', declared || '—'],
                 ['Resolved (lockfile)', resolved || '—'],
-                ['Latest published', latest],
+                [`Latest ${cur[0]}.x`, latest],
+                ['Newer major', newerMajor || '—'],
               ])
               .write();
 
             if (behind) {
               core.warning(
-                `${PKG} is ${curStr} but the latest published version is ${latest}. ` +
+                `${PKG} is ${curStr} but the latest ${cur[0]}.x release is ${latest}. ` +
                 `Bump it with: npm install ${PKG}@^${latest} (and commit the updated package-lock.json).`,
                 { title: '1823 Core dependency is behind' }
               );
@@ -249,7 +270,8 @@ jobs:
                   '| --- | --- |',
                   `| Declared range | \`${declared || '—'}\` |`,
                   `| Resolved (lockfile) | \`${resolved || '—'}\` |`,
-                  `| Latest published | \`${latest}\` |`,
+                  `| Latest ${cur[0]}.x | \`${latest}\` |`,
+                  `| Newer major | \`${newerMajor || '—'}\` |`,
                   ...(behind ? ['', `> Bump with \`npm install ${PKG}@^${latest}\` and commit the updated \`package-lock.json\`.`] : []),
                 ].join('\n');
 
