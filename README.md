@@ -72,7 +72,9 @@ jobs:
     secrets: inherit
 ```
 
-Same release model and check names as `swa-deploy.yml` (`deploy / Build and Deploy`, `deploy / Core Version Check`). Optional inputs: `node_version`, `python_version`, `run_tests`, `test_args`, `app_dir` (default `frontend`), `api_location` (default `api`). The Python runtime is selected by `platform.apiRuntime` in the app's `staticwebapp.config.json`.
+Same release model and check names as `swa-deploy.yml` (`deploy / Build and Deploy`, `deploy / Core Version Check`). Optional inputs: `node_version`, `python_version`, `run_tests`, `test_args`, `app_dir` (default `frontend`), `api_location` (default `api`), `api_tests_location` (default empty: pytest runs in `api_location`). The API runtime (`python:3.11`, or `node:20` for a Node API) is selected by `platform.apiRuntime` in the app's `staticwebapp.config.json`.
+
+An app whose Python API has moved to a pam-deacon backend deploys a Node proxy Function (`@1823-partners/swa-proxy`) from its own folder and keeps pytest on the Python folder: `api_location: swa-api` and `api_tests_location: api`, with `platform.apiRuntime` `node:20`. The deploy steps pass `NODE_AUTH_TOKEN` to Oryx, so the proxy folder's `.npmrc` can install `@1823-partners/*` through `${NODE_AUTH_TOKEN}`.
 
 ## Adding a New App
 
