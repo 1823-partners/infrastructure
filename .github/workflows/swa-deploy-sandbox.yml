@@ -4,9 +4,11 @@
 # the Vite frontend (package.json, build/) lives in frontend/, unit tests run
 # with vitest (which rejects the jest-only --watchAll flag), and the API is a
 # Python Azure Functions app in api/ whose runtime is pinned by
-# platform.apiRuntime in frontend/public/staticwebapp.config.json. This
-# workflow is the sandbox counterpart of swa-deploy.yml; swa-deploy.yml itself
-# is unchanged and remains the workflow for every other frontend.
+# platform.apiRuntime in frontend/public/staticwebapp.config.json. An app whose
+# Python API has moved to a pam-deacon backend deploys a Node proxy Function
+# instead and keeps pytest on its Python folder (the Node-proxy variant below).
+# This workflow is the sandbox counterpart of swa-deploy.yml; swa-deploy.yml
+# itself is unchanged and remains the workflow for every other frontend.
 #
 # Usage in a sandbox app:
 #
@@ -24,6 +26,18 @@
 #       with:
 #         azure_token_secret_name: AZURE_STATIC_WEB_APPS_API_TOKEN_...
 #       secrets: inherit
+#
+# Node-proxy variant: the SWA's API is a Node Function in its own folder
+# (@1823-partners/swa-proxy createAppServiceProxy, forwarding /api/* to the
+# app's pam-deacon backend), and pytest keeps running on the Python app in api/:
+#
+#       with:
+#         azure_token_secret_name: AZURE_STATIC_WEB_APPS_API_TOKEN_...
+#         api_location: swa-api      # deployed; Oryx runs npm install
+#         api_tests_location: api    # pytest runs here
+#
+# platform.apiRuntime is then "node:20", and swa-api/.npmrc reads
+# ${NODE_AUTH_TOKEN}, which the deploy steps pass to Oryx.
 #
 # Release model (same as swa-deploy.yml): push to main -> preview environment,
 # push to release-* -> production, pull requests build and test only.
@@ -43,7 +57,7 @@ on:
         type: string
         default: "22"
       python_version:
-        description: "Python version for the API tests; match platform.apiRuntime in staticwebapp.config.json"
+        description: "Python version for the API tests; for a Python API, match platform.apiRuntime in staticwebapp.config.json"
         required: false
         type: string
         default: "3.11"
@@ -63,10 +77,15 @@ on:
         type: string
         default: "frontend"
       api_location:
-        description: "Python Azure Functions API folder, relative to repo root. Empty string means no API."
+        description: "Azure Functions API folder the SWA deploys (Python, or a Node proxy Function), relative to repo root. Empty string means no API."
         required: false
         type: string
         default: "api"
+      api_tests_location:
+        description: "Python API folder pytest runs in, relative to repo root. Empty string means api_location (a Python API)."
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -110,14 +129,14 @@ jobs:
         run: npm test -- $TEST_ARGS
 
       - name: Setup Python
-        if: inputs.run_tests && inputs.api_location != ''
+        if: inputs.run_tests && (inputs.api_tests_location || inputs.api_location) != ''
         uses: actions/setup-python@v5
         with:
           python-version: ${{ inputs.python_version }}
 
       - name: API unit tests (pytest)
-        if: inputs.run_tests && inputs.api_location != ''
-        working-directory: ${{ inputs.api_location }}
+        if: inputs.run_tests && (inputs.api_tests_location || inputs.api_location) != ''
+        working-directory: ${{ inputs.api_tests_location || inputs.api_location }}
         run: |
           pip install -r requirements.txt
           if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
@@ -132,6 +151,12 @@ jobs:
       - name: Deploy main → preview
         if: github.ref == 'refs/heads/main'
         uses: Azure/static-web-apps-deploy@v1
+        env:
+          # Forward to Oryx so it can install @1823-partners/* packages
+          # from GitHub Packages while building a Node API. Consumed via
+          # ${NODE_AUTH_TOKEN} substitution in the API folder's .npmrc.
+          # A Python API ignores it.
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           azure_static_web_apps_api_token: ${{ secrets[inputs.azure_token_secret_name] }}
           repo_token: ${{ secrets.GITHUB_TOKEN }}
@@ -144,6 +169,8 @@ jobs:
       - name: Deploy release → production
         if: startsWith(github.ref, 'refs/heads/release-')
         uses: Azure/static-web-apps-deploy@v1
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           azure_static_web_apps_api_token: ${{ secrets[inputs.azure_token_secret_name] }}
           repo_token: ${{ secrets.GITHUB_TOKEN }}
