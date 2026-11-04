@@ -59,13 +59,13 @@ jobs:
     name: Build and Deploy
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: true
           persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node_version }}
           registry-url: "https://npm.pkg.github.com"
@@ -135,19 +135,19 @@ jobs:
     runs-on: ubuntu-latest
     name: Core Version Check
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node_version }}
           registry-url: "https://npm.pkg.github.com"
           scope: "@1823-partners"
 
       - name: Check @1823-partners/core is current
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
